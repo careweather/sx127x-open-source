@@ -18,6 +18,16 @@
 #include <sx127x_spi.h>
 #include <sys/ioctl.h>
 
+#ifndef SX127X_LINUX_SPI_DEBUG
+#define SX127X_LINUX_SPI_DEBUG 0
+#endif
+
+#if SX127X_LINUX_SPI_DEBUG
+#include <inttypes.h>
+#include <stdio.h>
+#include <unistd.h>
+#endif
+
 #define SPI_MAX_TRANSFER_SIZE 2047
 
 int sx127x_spi_read_registers(int reg, void *spi_device, size_t data_length, uint32_t *result) {
@@ -39,6 +49,9 @@ int sx127x_spi_read_registers(int reg, void *spi_device, size_t data_length, uin
   // first >> 8 shift is to remove garbage received during tx
   // second shift is to actually trim uint32 to the expected length
   *result = ntohl(rx_buf >> 8) >> (4 - data_length) * 8;
+#if SX127X_LINUX_SPI_DEBUG
+  fprintf(stderr, "sx127x spi read reg=0x%02x len=%zu val=0x%" PRIx32 "\n", reg, data_length, *result);
+#endif
   return 0;
 }
 
@@ -80,6 +93,23 @@ int sx127x_spi_write_register(int reg, const uint8_t *data, size_t data_length, 
   if (code == -1) {
     return errno;
   }
+#if SX127X_LINUX_SPI_DEBUG
+  for (size_t i = 0; i < data_length; i++) {
+    fprintf(stderr, "sx127x spi write reg=0x%02x off=%zu -> 0x%02x\n", reg, i, data[i]);
+    uint32_t rb = 0;
+    int rrc = sx127x_spi_read_registers((int)(reg + (int)i), spi_device, 1, &rb);
+    if (rrc != 0) {
+      fprintf(stderr, "sx127x spi write verify read failed errno=%d\n", rrc);
+      continue;
+    }
+    if (((uint8_t) rb) != data[i] && reg != 0x12) {
+      fprintf(stderr, "sx127x spi write verify mismatch want=0x%02x got=0x%" PRIx32 "\n", data[i], rb);
+      usleep(100000);
+      return sx127x_spi_write_register(reg, data, data_length, spi_device);
+    }
+    fprintf(stderr, "sx127x spi write verify ok\n");
+  }
+#endif
   return 0;
 }
 
