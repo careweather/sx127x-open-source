@@ -629,12 +629,11 @@ int sx127x_set_opmod(sx127x_mode_t opmod, sx127x_modulation_t modulation, sx127x
       // start tx as soon as first byte in FIFO available
       data = (TX_START_CONDITION_FIFO_EMPTY | HALF_MAX_FIFO_THRESHOLD);
       ERROR_CHECK(sx127x_shadow_spi_write_register(REGFIFOTHRESH, &data, 1, &device->spi_device));
-      // use sequencer to send single packet and stop carrier
-      uint8_t value = 0b10010000;
-      ERROR_CHECK(sx127x_shadow_spi_write_register(REGSEQCONFIG1, &value, 1, &device->spi_device));
-      device->active_modem = modulation;
-      device->opmod = opmod;
-      return SX127X_OK;
+      // Fall through to the common REGOPMODE write below so FSK TX behaves
+      // the same as LoRa TX (and matches the previous Veery Arduino driver):
+      // a single direct OpMode write. The top-level sequencer is left at its
+      // POR defaults; callers handle the post-PacketSent transition back to
+      // Standby/RX themselves.
     }
   } else {
     return SX127X_ERR_INVALID_ARG;
