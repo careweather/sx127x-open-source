@@ -370,6 +370,15 @@ struct sx127x_t {
 
   sx127x_modulation_t active_modem;
   sx127x_mode_t opmod;
+  // REGOPMODE bit 3 (LowFrequencyModeOn). OR'd into every REGOPMODE write
+  // performed by sx127x_set_opmod() so that the LF/HF band selection is
+  // applied atomically with the mode/modulation bits — without this, every
+  // set_opmod would clobber bit 3 to 0 (HF), producing a transient HF-only
+  // window even when the application targets the LF band
+  // Initialized in sx127x_create() from the chip's current REGOPMODE so the
+  // POR default (1 = LF) is preserved automatically; applications that
+  // operate exclusively in the HF band can clear this after create.
+  bool low_frequency_mode_on;
   sx127x_packet_format_t fsk_ook_format;
   sx127x_crc_type_t fsk_crc_type;
 

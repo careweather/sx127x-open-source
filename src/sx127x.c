@@ -595,13 +595,34 @@ int sx127x_create(void *spi_device, sx127x *result) {
   if (code != SX127X_OK) {
     return code;
   }
+  // Capture the current LowFrequencyModeOn bit (REGOPMODE bit 3) so subsequent
+  // sx127x_set_opmod() writes preserve the LF/HF band selection. Chip POR is 1
+  // (LF), so applications targeting the LF band (e.g. 137 / 433 / 470 MHz) get
+  // correct behavior by default; HF-only applications can clear the field.
+  uint8_t reg_opmode = 0;
+  code = sx127x_read_register(REGOPMODE, &result->spi_device, &reg_opmode);
+  if (code != SX127X_OK) {
+    return code;
+  }
+  result->low_frequency_mode_on = (reg_opmode & 0b00001000) != 0;
   sx127x_reset(result);
   return SX127X_OK;
 }
 
 int sx127x_set_opmod(sx127x_mode_t opmod, sx127x_modulation_t modulation, sx127x *device) {
+  // The LowFrequencyModeOn bit (REGOPMODE bit 3) is owned by the application
+  // via device->low_frequency_mode_on; OR it into every REGOPMODE write below
+  // so the band selection is applied atomically with the mode change and we
+  // never produce a transient bit-3=0 (HF) state on an LF-band radio. The
+  // bit is in the same position regardless of LongRangeMode, so the same
+  // mask works for both the FSK/OOK and LoRa code paths. (See the field
+  // doc comment in sx127x.h for rationale.)
+  uint8_t lf_bit = device->low_frequency_mode_on ? 0b00001000 : 0;
   // go to sleep if requested modulation changes LongRangeMode
   if (((device->active_modem & 0b10000000) != (modulation & 0b10000000)) && device->opmod != SX127X_MODE_SLEEP) {
+    // append_register read-modify-write with mask 0b11111000 already preserves
+    // bit 3 (it's outside the mask), so no extra OR is needed for these two
+    // intermediate writes.
     ERROR_CHECK(sx127x_append_register(REGOPMODE, SX127X_MODE_SLEEP, 0b11111000, &device->spi_device));
     ERROR_CHECK(sx127x_append_register(REGOPMODE, modulation, 0b00011111, &device->spi_device));
   }
@@ -638,7 +659,7 @@ int sx127x_set_opmod(sx127x_mode_t opmod, sx127x_modulation_t modulation, sx127x
   } else {
     return SX127X_ERR_INVALID_ARG;
   }
-  uint8_t value = (opmod | modulation);
+  uint8_t value = (opmod | modulation) | lf_bit;
   int result = sx127x_shadow_spi_write_register(REGOPMODE, &value, 1, &device->spi_device);
   if (result == SX127X_OK) {
     device->active_modem = modulation;
