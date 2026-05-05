@@ -14,6 +14,7 @@
 #include "sx127x.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include <sx127x_spi.h>
 #include <sx127x_registers.h>
@@ -96,6 +97,33 @@
       return SX127X_ERR_INVALID_STATE;                                                          \
     }                                                                                           \
   } while (0)
+
+// CHECK_IN_STANDBY_OR_SLEEP: debug-only guard for functions that the SX1276
+// datasheet requires to be called only in SLEEP or STANDBY mode.  Each call
+// costs one live SPI read of REGOPMODE, so the check is compiled out unless
+// the build is configured with SX127X_STANDBY_ASSERT=1 (sets the define
+// -DSX127X_DEBUG_STANDBY_ASSERT).
+//
+// Usage: place after any CHECK_MODULATION / CHECK_FSK_OOK_MODULATION line at
+// the top of the function body.
+#ifdef SX127X_DEBUG_STANDBY_ASSERT
+#define CHECK_IN_STANDBY_OR_SLEEP(device)                                            \
+  do {                                                                                \
+    uint8_t _dbg_op = 0;                                                              \
+    sx127x_read_register(REGOPMODE, &(device)->spi_device, &_dbg_op);                \
+    uint8_t _dbg_mode = _dbg_op & 0x07;                                               \
+    if (_dbg_mode != (uint8_t)SX127X_MODE_SLEEP &&                                   \
+        _dbg_mode != (uint8_t)SX127X_MODE_STANDBY) {                                 \
+      fprintf(stderr,                                                                  \
+              "sx127x STANDBY ASSERT [%s:%d]: needs SLEEP/STBY, "                    \
+              "got opmode=0x%02x (mode_bits=%u)\n",                                  \
+              __func__, __LINE__, _dbg_op, (unsigned)_dbg_mode);                     \
+      return SX127X_ERR_INVALID_STATE;                                                \
+    }                                                                                  \
+  } while (0)
+#else
+#define CHECK_IN_STANDBY_OR_SLEEP(device) ((void)(device))
+#endif
 
 static uint8_t sx1276_bw[] = {0b00000000, 0b00010000, 0b00100000, 0b00110000, 0b01000000, 0b01010000, 0b01100000, 0b01110000, 0b10000000, 0b10010000};
 static uint8_t sx1272_bw[] = {0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b01000000, 0b10000000};
@@ -677,6 +705,7 @@ int sx127x_get_opmod(sx127x *device, sx127x_mode_t *mode, sx127x_modulation_t *m
 }
 
 int sx127x_set_frequency(uint64_t frequency, sx127x *device) {
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint64_t min_frequency = device->chip_version == SX1276_VERSION ? SX1276_MIN_FREQUENCY : SX1272_MIN_FREQUENCY;
   if (frequency < min_frequency || frequency > SX127X_MAX_FREQUENCY) {
     return SX127X_ERR_INVALID_ARG;
@@ -771,6 +800,7 @@ int sx127x_rx_get_lna_boost_hf(sx127x *device, bool *value) {
 
 int sx127x_lora_set_bandwidth(sx127x_bw_t bandwidth, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (device->chip_version == SX1272_VERSION) {
     if (((uint8_t) bandwidth) < (uint8_t) SX127X_BW_125000 || ((uint8_t) bandwidth) > (uint8_t) SX127X_BW_500000) {
       return SX127X_ERR_INVALID_ARG;
@@ -784,6 +814,7 @@ int sx127x_lora_set_bandwidth(sx127x_bw_t bandwidth, sx127x *device) {
 
 int sx127x_lora_set_spreading_factor(sx127x_sf_t spreading_factor, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (spreading_factor == SX127X_SF_6 && !device->use_implicit_header) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -818,6 +849,7 @@ void sx127x_rx_set_callback(void (*rx_callback)(void *, uint8_t *, uint16_t), vo
 
 int sx127x_lora_set_syncword(uint8_t value, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   return sx127x_shadow_spi_write_register(REGSYNCWORD, &value, 1, &device->spi_device);
 }
 
@@ -828,6 +860,7 @@ int sx127x_lora_get_syncword(sx127x *device, uint8_t *value) {
 }
 
 int sx127x_set_preamble_length(uint16_t value, sx127x *device) {
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint8_t data[] = {(uint8_t) (value >> 8), (uint8_t) (value >> 0)};
   if (device->active_modem == SX127X_MODULATION_LORA) {
     return sx127x_shadow_spi_write_register(REGPREAMBLEMSB, data, 2, &device->spi_device);
@@ -851,6 +884,7 @@ int sx127x_get_preamble_length(sx127x *device, uint16_t *value) {
 
 int sx127x_lora_set_implicit_header(sx127x_implicit_header_t *header, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (device->chip_version == SX1276_VERSION) {
     if (header == NULL) {
       device->expected_packet_length = 0;
@@ -906,6 +940,7 @@ int sx127x_lora_get_implicit_header(sx127x *device, sx127x_implicit_header_t *he
 
 int sx127x_lora_set_frequency_hopping(uint8_t period, uint64_t *frequencies, uint8_t frequencies_length, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (period != 0 && (frequencies == NULL || frequencies_length == 0)) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1025,6 +1060,7 @@ void sx127x_tx_set_callback(void (*tx_callback)(void *), void *ctx, sx127x *devi
 }
 
 int sx127x_tx_set_pa_config(sx127x_pa_pin_t pin, int power, sx127x *device) {
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (pin == SX127X_PA_PIN_RFO && (power < -4 || power > 15)) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1090,6 +1126,7 @@ int sx127x_tx_get_pa_config(sx127x *device, sx127x_pa_pin_t *pin, int *power) {
 }
 
 int sx127x_tx_set_ocp(bool enable, uint8_t max_current, sx127x *device) {
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (!enable) {
     uint8_t value = 0b00000000;
     return sx127x_shadow_spi_write_register(REGOCP, &value, 1, &device->spi_device);
@@ -1129,6 +1166,7 @@ int sx127x_tx_get_ocp(sx127x *device, bool *enable, uint8_t *milliamps) {
 
 int sx127x_lora_tx_set_explicit_header(sx127x_tx_header_t *header, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_LORA);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (header == NULL) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1343,6 +1381,7 @@ void sx127x_lora_cad_set_callback(void (*cad_callback)(void *, int), void *ctx, 
 
 int sx127x_fsk_ook_set_bitrate(float bitrate, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint16_t bitrate_value;
   uint8_t bitrate_fractional;
   if (device->active_modem == SX127X_MODULATION_FSK) {
@@ -1387,6 +1426,7 @@ int sx127x_fsk_ook_get_bitrate(sx127x *device, float *bitrate) {
 
 int sx127x_fsk_set_fdev(float frequency_deviation, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_FSK);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (frequency_deviation < 600 || frequency_deviation > 200000) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1472,6 +1512,7 @@ int sx127x_fsk_ook_rx_get_collision_restart(sx127x *device, bool *enable, uint8_
 
 int sx127x_fsk_ook_rx_set_afc_auto(bool afc_auto, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint8_t value = (afc_auto ? 0b00010000 : 0b00000000);
   return sx127x_append_register(REGRXCONFIG, value, 0b11101111, &device->spi_device);
 }
@@ -1523,6 +1564,7 @@ static float sx127x_fsk_ook_calculate_bw(uint8_t value) {
 
 int sx127x_fsk_ook_rx_set_afc_bandwidth(float bandwidth, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint8_t value = sx127x_fsk_ook_calculate_bw_register(bandwidth);
   return sx127x_shadow_spi_write_register(REGAFCBW, &value, 1, &device->spi_device);
 }
@@ -1537,6 +1579,7 @@ int sx127x_fsk_ook_rx_get_afc_bandwidth(sx127x *device, float *bandwidth) {
 
 int sx127x_fsk_ook_rx_set_bandwidth(float bandwidth, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint8_t value = sx127x_fsk_ook_calculate_bw_register(bandwidth);
   return sx127x_shadow_spi_write_register(REGRXBW, &value, 1, &device->spi_device);
 }
@@ -1551,6 +1594,7 @@ int sx127x_fsk_ook_rx_get_bandwidth(sx127x *device, float *bandwidth) {
 
 int sx127x_fsk_ook_rx_set_trigger(sx127x_rx_trigger_t trigger, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   return sx127x_append_register(REGRXCONFIG, trigger, 0b11111000, &device->spi_device);
 }
 
@@ -1564,6 +1608,7 @@ int sx127x_fsk_ook_rx_get_trigger(sx127x *device, sx127x_rx_trigger_t *trigger) 
 
 int sx127x_fsk_ook_set_syncword(const uint8_t *syncword, uint8_t syncword_length, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (syncword_length == 0 || syncword_length > 8) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1587,6 +1632,7 @@ int sx127x_fsk_ook_get_syncword(sx127x *device, uint8_t *syncword, uint8_t *sync
 
 int sx127x_fsk_ook_rx_set_rssi_config(sx127x_rssi_smoothing_t smoothing, int8_t offset, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (offset < -16 || offset > 15) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1605,6 +1651,7 @@ int sx127x_fsk_ook_rx_get_rssi_config(sx127x *device, sx127x_rssi_smoothing_t *s
 
 int sx127x_fsk_ook_set_packet_encoding(sx127x_packet_encoding_t encoding, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   return sx127x_append_register(REGPACKETCONFIG1, encoding, 0b10011111, &device->spi_device);
 }
 
@@ -1618,6 +1665,7 @@ int sx127x_fsk_ook_get_packet_encoding(sx127x *device, sx127x_packet_encoding_t 
 
 int sx127x_fsk_ook_set_crc(sx127x_crc_type_t crc_type, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   //  + Do not clear FIFO
   int result = sx127x_append_register(REGPACKETCONFIG1, (uint8_t) crc_type | 0b00001000, 0b11100110, &device->spi_device);
   if (result == SX127X_OK) {
@@ -1636,6 +1684,7 @@ int sx127x_fsk_ook_get_crc(sx127x *device, sx127x_crc_type_t *crc_type) {
 
 int sx127x_fsk_ook_set_packet_format(sx127x_packet_format_t format, uint16_t max_payload_length, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (format == SX127X_FIXED && (max_payload_length == 0 || max_payload_length > MAX_PACKET_SIZE_FSK_FIXED)) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1663,6 +1712,7 @@ int sx127x_fsk_ook_get_packet_format(sx127x *device, sx127x_packet_format_t *for
 
 int sx127x_fsk_ook_set_address_filtering(sx127x_address_filtering_t type, uint8_t node_address, uint8_t broadcast_address, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (type == SX127X_FILTER_NODE_AND_BROADCAST) {
     ERROR_CHECK(sx127x_shadow_spi_write_register(REGBROADCASTADRS, &broadcast_address, 1, &device->spi_device));
   }
@@ -1691,6 +1741,7 @@ int sx127x_fsk_ook_get_address_filtering(sx127x *device, sx127x_address_filterin
 
 int sx127x_fsk_set_data_shaping(sx127x_fsk_data_shaping_t data_shaping, sx127x_pa_ramp_t pa_ramp, sx127x *device) {
   CHECK_MODULATION(device, SX127X_MODULATION_FSK);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   uint8_t value = (data_shaping | pa_ramp);
   return sx127x_shadow_spi_write_register(REGPARAMP, &value, 1, &device->spi_device);
 }
@@ -1721,6 +1772,7 @@ int sx127x_ook_get_data_shaping(sx127x *device, sx127x_ook_data_shaping_t *data_
 
 int sx127x_fsk_ook_set_preamble_type(sx127x_preamble_type_t type, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   return sx127x_append_register(REGSYNCCONFIG, type, 0b11011111, &device->spi_device);
 }
 
@@ -1734,6 +1786,7 @@ int sx127x_fsk_ook_get_preamble_type(sx127x *device, sx127x_preamble_type_t *typ
 
 int sx127x_fsk_ook_rx_set_preamble_detector(bool enable, uint8_t detector_size, uint8_t detector_tolerance, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   if (detector_size > 3 || detector_size < 1) {
     return SX127X_ERR_INVALID_ARG;
   }
@@ -1782,6 +1835,7 @@ int sx127x_fsk_ook_get_raw_temperature(sx127x *device, int8_t *raw_temperature) 
 
 int sx127x_fsk_ook_set_temp_monitor(bool enable, sx127x *device) {
   CHECK_FSK_OOK_MODULATION(device);
+  CHECK_IN_STANDBY_OR_SLEEP(device);
   // the field is called TempMonitorOff, thus inverted
   uint8_t value = (enable ? 0b00000000 : 0b00000001);
   return sx127x_append_register(REGIMAGECAL, value, 0b11111110, &device->spi_device);
